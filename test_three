@@ -1,0 +1,41 @@
+from kivy.app import App
+from kivy.uix.gridlayout import GridLayout
+from kivy.uix.button import Button
+
+class Cell(Button):
+    pass
+
+class Board(GridLayout):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.cols = 2
+        self.start_cell = None
+        self.cells = []
+
+        for text in ["A", "B", "C", "D"]:
+            btn = Cell(text=text, font_size=32)
+            self.cells.append(btn)
+            self.add_widget(btn)
+
+    def on_touch_down(self, touch):
+        for cell in self.cells:
+            if cell.collide_point(*touch.pos):
+                self.start_cell = cell
+                return True
+        return super().on_touch_down(touch)
+
+    def on_touch_up(self, touch):
+        if self.start_cell:
+            for cell in self.cells:
+                if cell.collide_point(*touch.pos) and cell != self.start_cell:
+                    self.start_cell.text, cell.text = cell.text, self.start_cell.text
+                    break
+            self.start_cell = None
+            return True
+        return super().on_touch_up(touch)
+
+class MyApp(App):
+    def build(self):
+        return Board()
+
+MyApp().run()
