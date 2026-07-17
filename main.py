@@ -1,11 +1,3 @@
-'''
-1. Добавлен счетчик очков с автообновлением.
-2. Центрирование все картики по окку.
-3. Просчитывание будущих шариков для создания возможности минимального хода.
-4. Запрет на ходы без результата.
-'''
-
-
 from random import choice
 from kivy.app import App
 from kivy.uix.floatlayout import FloatLayout
@@ -203,6 +195,10 @@ class Match3Board(FloatLayout):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.target_score = 30
+        self.time_left = 60
+        self.level_finished = False
+        self.timer_event = None
         self.grid = [[None for _ in range(self.cols)] for _ in range(self.rows)]
         self.selected = None
         self.touch_start = None
@@ -213,6 +209,7 @@ class Match3Board(FloatLayout):
         self.build_score_ui()
         Clock.schedule_once(self.build_board, 0)
         self.refill_planner = RefillPlanner(self.rows, self.cols, self.palette)
+
 
     def reposition_board(self, *args):
         for row in range(self.rows):
@@ -229,10 +226,11 @@ class Match3Board(FloatLayout):
     def board_left(self):
         return (self.width - self.board_pixel_width()) / 2
 
-    def bring_score_to_front(self):
-        if self.score_label.parent:
-            self.remove_widget(self.score_label)
-        self.add_widget(self.score_label)
+    def bring_ui_to_front(self):
+        for widget in [self.score_label, self.timer_label, self.status_label]:
+            if widget.parent:
+                self.remove_widget(widget)
+            self.add_widget(widget)
 
     def build_score_ui(self):
         self.score_label = Label(
@@ -241,15 +239,47 @@ class Match3Board(FloatLayout):
             font_size=28,
             color=(1, 1, 1, 1),
             size_hint=(None, None),
-            size=(220, 50),
+            size=(260, 50),
             halign='right',
             valign='middle',
         )
         self.score_label.text_size = self.score_label.size
         self.add_widget(self.score_label)
 
+        self.timer_label = Label(
+            text=self.timer_text(),
+            bold=True,
+            font_size=28,
+            color=(1, 1, 1, 1),
+            size_hint=(None, None),
+            size=(220, 50),
+            halign='left',
+            valign='middle',
+        )
+        self.timer_label.text_size = self.timer_label.size
+        self.add_widget(self.timer_label)
+
+        self.status_label = Label(
+            text="",
+            bold=True,
+            font_size=42,
+            color=(1, 1, 1, 1),
+            size_hint=(None, None),
+            size=(500, 80),
+            halign='center',
+            valign='middle',
+        )
+        self.status_label.text_size = self.status_label.size
+        self.add_widget(self.status_label)
+
         self.bind(size=self.update_score_ui_pos, pos=self.update_score_ui_pos)
         Clock.schedule_once(self.update_score_ui_pos, 0)
+
+    def timer_text(self):
+        return f"Время: {self.time_left}"
+
+    def update_timer(self):
+        self.timer_label.text = self.timer_text()
 
     def create_gem_by_value(self, row, col, value):
         for color_rgba, v in self.palette:
@@ -258,13 +288,61 @@ class Match3Board(FloatLayout):
         raise ValueError(f"Unknown gem value: {value}")
 
     def update_score_ui_pos(self, *args):
-        right_margin = 80
         top_margin = 12
+        side_margin = 30
 
-        x = self.width - self.score_label.width - right_margin
-        y = self.height - self.score_label.height - top_margin
+        self.timer_label.pos = (
+            side_margin,
+            self.height - self.timer_label.height - top_margin
+        )
 
-        self.score_label.pos = (x, y)
+        self.score_label.pos = (
+            self.width - self.score_label.width - side_margin,
+            self.height - self.score_label.height - top_margin
+        )
+
+        self.status_label.pos = (
+            (self.width - self.status_label.width) / 2,
+            self.height / 2 - self.status_label.height / 2
+        )
+
+    def start_level_timer(self):
+        if self.timer_event:
+            self.timer_event.cancel()
+        self.timer_event = Clock.schedule_interval(self.tick, 1)
+
+    def tick(self, dt):
+        if self.level_finished:
+            return False
+
+        self.time_left -= 1
+        self.update_timer()
+
+        if self.time_left <= 0:
+            self.time_left = 0
+            self.update_timer()
+            self.finish_level(False)
+            return False
+        
+    def finish_level(self, won):
+        if self.level_finished:
+            return
+
+        self.level_finished = True
+        self.animating = True
+
+        if self.timer_event:
+            self.timer_event.cancel()
+            self.timer_event = None
+
+        if won:
+            self.status_label.text = "Уровень пройден!"
+            self.status_label.color = (0.45, 1, 0.55, 1)
+        else:
+            self.status_label.text = "Время вышло"
+            self.status_label.color = (1, 0.4, 0.4, 1)
+
+        self.bring_ui_to_front()
 
     def score_text(self):
         return f"Очки: {self.score}"
@@ -280,7 +358,8 @@ class Match3Board(FloatLayout):
                 self.grid[row][col] = gem
                 self.add_widget(gem)
 
-        self.bring_score_to_front()
+        self.bring_ui_to_front()
+        self.start_level_timer()
         Clock.schedule_once(self.resolve_matches, 0.1)
 
     def create_random_gem(self, row, col):
@@ -306,7 +385,7 @@ class Match3Board(FloatLayout):
         return None
 
     def on_touch_down(self, touch):
-        if self.animating:
+        if self.animating or self.level_finished:
             return True
 
         gem = self.gem_at_touch(touch.pos)
@@ -317,7 +396,7 @@ class Match3Board(FloatLayout):
         return super().on_touch_down(touch)
 
     def on_touch_up(self, touch):
-        if self.animating:
+        if self.animating or self.level_finished:
             return True
 
         if not self.selected or not self.touch_start:
@@ -470,8 +549,14 @@ class Match3Board(FloatLayout):
         self.show_score_gain(gained)
 
         def apply_score(*args):
+            if self.level_finished:
+                return
+
             self.score = old_score + gained
             self.update_score()
+
+            if self.score >= self.target_score:
+                self.finish_level(True)
 
         Clock.schedule_once(apply_score, 0.5)
     
@@ -533,7 +618,7 @@ class Match3Board(FloatLayout):
         def one_done(*_):
             animations_left["count"] -= 1
             if animations_left["count"] == 0:
-                self.bring_score_to_front()
+                self.bring_ui_to_front()
                 Clock.schedule_once(self.resolve_matches, 0.05)
 
         for col in range(self.cols):
@@ -595,7 +680,7 @@ class Match3Board(FloatLayout):
 
                 target_row -= 1
 
-        self.bring_score_to_front()
+        self.bring_ui_to_front()
 
         if animations_left["count"] == 0:
             Clock.schedule_once(self.resolve_matches, 0.05)
