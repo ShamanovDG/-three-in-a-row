@@ -1,0 +1,6 @@
+.buildozer
+.git
+.venv
+bin
+buildozer.spec
+match3_results.db
