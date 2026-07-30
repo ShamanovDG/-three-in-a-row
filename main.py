@@ -1,3 +1,6 @@
+from kivmob import KivMob, TestIds
+from kivy.logger import Logger
+
 import sqlite3
 from copy import deepcopy
 from datetime import datetime
@@ -7,7 +10,7 @@ from kivy.animation import Animation
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.window import Window
-from kivy.graphics import Color, Ellipse, Line
+from kivy.graphics import Color, Ellipse, Line, RoundedRectangle
 from kivy.uix.button import Button
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.gridlayout import GridLayout
@@ -18,8 +21,7 @@ from kivy.uix.widget import Widget
 
 Window.clearcolor = (0.10, 0.08, 0.16, 1)
 
-
-# Класс для работы с базой данных результатов игры #
+# Класс для работы с базой данных результатов игры
 class ResultsRepository:
     def __init__(self, db_path="match3_results.db"):
         self.db_path = db_path
@@ -160,14 +162,15 @@ class RefillPlanner:
 
 # Класс, представляющий один камень на игровом поле
 class Gem(Widget):
-    def __init__(self, row, col, color_rgba, value, **kwargs):
+    def __init__(self, row, col, color_rgba, value, gem_size=72, **kwargs):
         super().__init__(**kwargs)
         self.row = row
         self.col = col
         self.value = value
+        self.base_color = color_rgba
 
         self.size_hint = (None, None)
-        self.size = (72, 72)
+        self.size = (gem_size, gem_size)
 
         with self.canvas.before:
             self.shadow_color = Color(0, 0, 0, 0.18)
@@ -199,24 +202,26 @@ class Gem(Widget):
     def _update_graphics(self, *_):
         self.circle.pos = self.pos
         self.circle.size = self.size
-        self.shadow.pos = (self.x + 4, self.y - 4)
+
+        shadow_dx = self.width * 0.05
+        shadow_dy = self.height * 0.05
+        self.shadow.pos = (self.x + shadow_dx, self.y - shadow_dy)
         self.shadow.size = self.size
 
-        radius = min(self.width, self.height) / 2 - 0.6
+        radius = min(self.width, self.height) / 2 - max(0.6, self.width * 0.01)
+        self.stroke.width = max(1.0, self.width * 0.018)
         self.stroke.circle = (self.center_x, self.center_y, radius)
 
         self.label.pos = self.pos
         self.label.size = self.size
         self.label.text_size = self.size
+        self.label.font_size = max(14, self.width * 0.33)
 
 
 # Класс, представляющий игровое поле для игры «Match-3»
 class Match3Board(FloatLayout):
     rows = 6
     cols = 6
-    cell_size = 78
-    gap = 10
-    margin_y = 24
 
     palette = [
         ((0.92, 0.30, 0.36, 1), 1),
@@ -232,6 +237,7 @@ class Match3Board(FloatLayout):
         self.target_score = 30
         self.initial_time = 60
 
+
         self.repo = ResultsRepository()
         self.refill_planner = RefillPlanner(self.rows, self.cols, self.palette)
 
@@ -245,18 +251,107 @@ class Match3Board(FloatLayout):
         self.animating = False
         self.level_finished = False
 
+        with self.canvas.before:
+            self.board_bg_color = Color(1, 1, 1, 0.05)
+            self.board_bg = RoundedRectangle(radius=[18])
+
         self.build_ui()
         self.bind(size=self.reposition_board, pos=self.reposition_board)
 
         Clock.schedule_once(self.build_board, 0)
+        
+
+    # ---------- Адаптивная геометрия ----------
+
+    # Вернуть безопасную ширину виджета, чтобы избежать нуля при первом рендере
+    def safe_width(self):
+        return max(self.width, 1)
+
+    # Вернуть безопасную высоту виджета, чтобы избежать нуля при первом рендере
+    def safe_height(self):
+        return max(self.height, 1)
+
+    # Вычислить размер стороны игрового поля относительно текущего окна
+    def board_side(self):
+        return min(self.safe_width() * 0.95, self.safe_height() * 0.68)
+
+    # Вычислить расстояние между клетками относительно размера поля
+    def gap_px(self):
+        return max(4, self.board_side() * 0.018)
+
+    # Вычислить размер одной клетки поля
+    def cell_size_px(self):
+        gap = self.gap_px()
+        return (self.board_side() - gap * (self.cols - 1)) / self.cols
+
+    # Вычислить размер самого камня внутри клетки
+    def gem_size_px(self):
+        return self.cell_size_px() * 0.95
+
+    # Вычислить полную ширину игрового поля в пикселях
+    def board_pixel_width(self):
+        cell = self.cell_size_px()
+        gap = self.gap_px()
+        return self.cols * cell + (self.cols - 1) * gap
+
+    # Вычислить полную высоту игрового поля в пикселях
+    def board_pixel_height(self):
+        cell = self.cell_size_px()
+        gap = self.gap_px()
+        return self.rows * cell + (self.rows - 1) * gap
+
+    # Вычислить левую границу игрового поля
+    def board_left(self):
+        return (self.safe_width() - self.board_pixel_width()) / 2
+
+    # Вычислить нижнюю границу игрового поля с учётом места под UI
+    def board_bottom(self):
+        lower_reserved = self.safe_height() * 0.08
+        top_reserved = self.safe_height() * 0.16
+        free_y = self.safe_height() - top_reserved - lower_reserved - self.board_pixel_height()
+        return lower_reserved + max(0, free_y / 2)
+
+    # Вернуть прямоугольник фона под игровое поле
+    def board_rect(self):
+        padding = self.cell_size_px() * 0.18
+        return (
+            self.board_left() - padding,
+            self.board_bottom() - padding,
+            self.board_pixel_width() + padding * 2,
+            self.board_pixel_height() + padding * 2,
+        )
+
+    # Преобразовать координаты сетки (row, col) в экранную позицию камня
+    def grid_to_pos(self, row, col):
+        cell = self.cell_size_px()
+        gap = self.gap_px()
+        gem = self.gem_size_px()
+
+        x = self.board_left() + col * (cell + gap) + (cell - gem) / 2
+        y = self.board_bottom() + (self.rows - 1 - row) * (cell + gap) + (cell - gem) / 2
+        return x, y
+
+    # Вычислить позицию появления нового камня выше поля
+    def spawn_pos_above(self, row, col, extra_rows=1):
+        cell = self.cell_size_px()
+        gap = self.gap_px()
+        gem = self.gem_size_px()
+
+        x = self.board_left() + col * (cell + gap) + (cell - gem) / 2
+        y = self.board_bottom() + (self.rows - 1 - row + extra_rows) * (cell + gap) + (cell - gem) / 2
+        return x, y
+
+    # Вычислить минимальный порог свайпа в зависимости от размера окна
+    def swipe_threshold_px(self):
+        return max(18, min(self.safe_width(), self.safe_height()) * 0.025)
 
     # ---------- UI ----------
 
-    # Создать элементы интерфейса (метки и кнопки) и разместить их на доске
+    # Создать элементы интерфейса и добавить их на экран
     def build_ui(self):
-        self.score_label = self.make_label(self.score_text(), 28, (260, 50), "right")
-        self.timer_label = self.make_label(self.timer_text(), 28, (220, 50), "left")
-        self.status_label = self.make_label("", 42, (500, 80), "center")
+        self.timer_label = self.make_label(self.timer_text(), "left")
+        self.score_label = self.make_label(self.score_text(), "right")
+        self.status_label = self.make_label("", "center")
 
         self.restart_button = self.make_button("Играть ещё раз", self.restart_level)
         self.results_button = self.make_button("Результаты", self.show_results_popup)
@@ -274,60 +369,96 @@ class Match3Board(FloatLayout):
         self.bind(size=self.update_ui_positions, pos=self.update_ui_positions)
         Clock.schedule_once(self.update_ui_positions, 0)
 
-    # Создать метку с заданным текстом, размером шрифта, размером и выравниванием
-    def make_label(self, text, font_size, size, halign):
+    # Создать метку интерфейса с заданным текстом и выравниванием
+    def make_label(self, text, halign):
         label = Label(
             text=text,
             bold=True,
-            font_size=font_size,
             color=(1, 1, 1, 1),
             size_hint=(None, None),
-            size=size,
             halign=halign,
             valign="middle",
         )
         label.text_size = label.size
         return label
 
-    # Создать кнопку с заданным текстом и функцией обратного вызова
+    # Создать кнопку с привязанным обработчиком нажатия
     def make_button(self, text, callback):
         btn = Button(
             text=text,
             size_hint=(None, None),
-            size=(220, 56),
             opacity=0,
             disabled=True,
+            background_normal="",
+            background_down="",
+            background_color=(0.28, 0.24, 0.42, 1),
+            color=(1, 1, 1, 1),
+            bold=True,
         )
         btn.bind(on_release=lambda *_: callback())
         return btn
 
-    # Обновить позиции элементов интерфейса при изменении размера окна
+    # Пересчитать размеры и позиции элементов интерфейса при изменении окна
     def update_ui_positions(self, *_):
-        top_margin = 12
-        side_margin = 30
+        w = self.safe_width()
+        h = self.safe_height()
+
+        side_margin = w * 0.04
+        top_margin = h * 0.02
+
+        small_font = max(18, min(w, h) * 0.028)
+        status_font = max(24, min(w, h) * 0.05)
+
+        panel_w = min(w * 0.32, 280)
+        panel_h = max(42, h * 0.07)
+
+        self.timer_label.font_size = small_font
+        self.score_label.font_size = small_font
+        self.status_label.font_size = status_font
+
+        self.timer_label.size = (panel_w, panel_h)
+        self.score_label.size = (panel_w, panel_h)
+        self.status_label.size = (min(w * 0.75, 560), max(60, h * 0.1))
+
+        self.timer_label.text_size = self.timer_label.size
+        self.score_label.text_size = self.score_label.size
+        self.status_label.text_size = self.status_label.size
 
         self.timer_label.pos = (
             side_margin,
-            self.height - self.timer_label.height - top_margin,
-        )
-        self.score_label.pos = (
-            self.width - self.score_label.width - side_margin,
-            self.height - self.score_label.height - top_margin,
-        )
-        self.status_label.pos = (
-            (self.width - self.status_label.width) / 2,
-            self.height / 2 - self.status_label.height / 2 + 30,
-        )
-        self.restart_button.pos = (
-            (self.width - self.restart_button.width) / 2,
-            self.height / 2 - 110,
-        )
-        self.results_button.pos = (
-            (self.width - self.results_button.width) / 2,
-            self.height / 2 - 180,
+            h - self.timer_label.height - top_margin,
         )
 
-    # Переместить элементы интерфейса на передний план поверх камней
+        self.score_label.pos = (
+            w - self.score_label.width - side_margin,
+            h - self.score_label.height - top_margin,
+        )
+
+        self.status_label.pos = (
+            (w - self.status_label.width) / 2,
+            h * 0.53,
+        )
+
+        btn_w = min(w * 0.34, 260)
+        btn_h = max(46, h * 0.075)
+
+        self.restart_button.size = (btn_w, btn_h)
+        self.results_button.size = (btn_w, btn_h)
+
+        self.restart_button.font_size = max(16, btn_h * 0.34)
+        self.results_button.font_size = max(16, btn_h * 0.34)
+
+        self.restart_button.pos = (
+            (w - btn_w) / 2,
+            h * 0.36,
+        )
+
+        self.results_button.pos = (
+            (w - btn_w) / 2,
+            h * 0.27,
+        )
+
+    # Переместить UI-элементы на передний план поверх камней
     def bring_ui_to_front(self):
         for widget in [
             self.score_label,
@@ -340,19 +471,19 @@ class Match3Board(FloatLayout):
                 self.remove_widget(widget)
             self.add_widget(widget)
 
-    # Показать кнопки «Играть ещё раз» и «Результаты»
+    # Показать кнопки после завершения уровня
     def show_end_buttons(self):
         for btn in (self.restart_button, self.results_button):
             btn.opacity = 1
             btn.disabled = False
 
-    # Скрыть кнопки «Играть ещё раз» и «Результаты»
+    # Скрыть кнопки завершения уровня
     def hide_end_buttons(self):
         for btn in (self.restart_button, self.results_button):
             btn.opacity = 0
             btn.disabled = True
 
-    # Показать всплывающее окно с таблицей сохранённых результатов
+    # Показать всплывающее окно с историей сохранённых результатов
     def show_results_popup(self):
         rows = self.repo.load_results()
 
@@ -416,7 +547,7 @@ class Match3Board(FloatLayout):
     def update_timer(self):
         self.timer_label.text = self.timer_text()
 
-    # Сбросить состояние игры: поле, выбор, счёт, время и статус
+    # Сбросить игровое состояние перед новым запуском уровня
     def reset_state(self):
         self.grid = [[None for _ in range(self.cols)] for _ in range(self.rows)]
         self.selected = None
@@ -431,35 +562,24 @@ class Match3Board(FloatLayout):
         self.update_timer()
         self.hide_end_buttons()
 
-    # ---------- Board geometry ----------
+    # ---------- Board redraw ----------
 
-    # Вычислить ширину игрового поля в пикселях
-    def board_pixel_width(self):
-        return self.cols * self.cell_size + (self.cols - 1) * self.gap
-
-    # Вычислить координату X левого края игрового поля
-    def board_left(self):
-        return (self.width - self.board_pixel_width()) / 2
-
-    # Преобразовать координаты сетки (row, col) в позицию на экране (x, y)
-    def grid_to_pos(self, row, col):
-        x = self.board_left() + col * (self.cell_size + self.gap)
-        y = self.margin_y + (self.rows - 1 - row) * (self.cell_size + self.gap)
-        return x, y
-
-    # Вычислить позицию появления нового камня над текущей строкой
-    def spawn_pos_above(self, row, col, extra_rows=1):
-        x = self.board_left() + col * (self.cell_size + self.gap)
-        y = self.margin_y + (self.rows - 1 - row + extra_rows) * (self.cell_size + self.gap)
-        return x, y
-
-    # Перерасчитать позиции всех камней при изменении размера окна
+    # Пересчитать размер и положение поля и всех камней при изменении окна
     def reposition_board(self, *_):
+        bx, by, bw, bh = self.board_rect()
+        radius = max(10, self.cell_size_px() * 0.2)
+        self.board_bg.pos = (bx, by)
+        self.board_bg.size = (bw, bh)
+        self.board_bg.radius = [radius]
+
+        gem_size = self.gem_size_px()
         for row in range(self.rows):
             for col in range(self.cols):
                 gem = self.grid[row][col]
                 if gem:
+                    gem.size = (gem_size, gem_size)
                     gem.pos = self.grid_to_pos(row, col)
+
         self.update_ui_positions()
 
     # ---------- Board building ----------
@@ -467,16 +587,16 @@ class Match3Board(FloatLayout):
     # Создать случайный камень для указанной клетки
     def create_random_gem(self, row, col):
         color_rgba, value = choice(self.palette)
-        return Gem(row, col, color_rgba, value)
+        return Gem(row, col, color_rgba, value, gem_size=self.gem_size_px())
 
-    # Создать камень по его значению с выбором нужного цвета из палитры
+    # Создать камень по указанному значению
     def create_gem_by_value(self, row, col, value):
         for color_rgba, v in self.palette:
             if v == value:
-                return Gem(row, col, color_rgba, value)
+                return Gem(row, col, color_rgba, value, gem_size=self.gem_size_px())
         raise ValueError(f"Unknown gem value: {value}")
 
-    # Удалить все камни с поля из иерархии виджетов
+    # Удалить все текущие камни из иерархии виджетов
     def clear_board_widgets(self):
         for row in range(self.rows):
             for col in range(self.cols):
@@ -484,8 +604,10 @@ class Match3Board(FloatLayout):
                 if gem and gem.parent:
                     self.remove_widget(gem)
 
-    # Построить начальное игровое поле и запустить таймер уровня
+    # Построить стартовое игровое поле и запустить таймер
     def build_board(self, *_):
+        self.clear_board_widgets()
+
         for row in range(self.rows):
             for col in range(self.cols):
                 gem = self.create_random_gem(row, col)
@@ -493,11 +615,12 @@ class Match3Board(FloatLayout):
                 self.grid[row][col] = gem
                 self.add_widget(gem)
 
+        self.reposition_board()
         self.bring_ui_to_front()
         self.start_level_timer()
         Clock.schedule_once(self.resolve_matches, 0.1)
 
-    # Полностью перезапустить уровень и начать игру заново
+    # Полностью перезапустить уровень
     def restart_level(self):
         if self.timer_event:
             self.timer_event.cancel()
@@ -510,13 +633,13 @@ class Match3Board(FloatLayout):
 
     # ---------- Timer ----------
 
-    # Запустить таймер уровня, вызывающий tick каждую секунду
+    # Запустить таймер уровня с обновлением раз в секунду
     def start_level_timer(self):
         if self.timer_event:
             self.timer_event.cancel()
         self.timer_event = Clock.schedule_interval(self.tick, 1)
 
-    # Обновить оставшееся время и завершить уровень при его истечении
+    # Обработать один тик таймера и завершить игру при истечении времени
     def tick(self, _dt):
         if self.level_finished:
             return False
@@ -530,7 +653,7 @@ class Match3Board(FloatLayout):
 
         self.update_timer()
 
-    # Завершить уровень, сохранить результат и показать статус/кнопки
+    # Завершить уровень, сохранить результат и показать статус
     def finish_level(self, won):
         if self.level_finished:
             return
@@ -556,7 +679,7 @@ class Match3Board(FloatLayout):
 
     # ---------- Input ----------
 
-    # Найти камень, по которому кликнул/тапнул пользователь
+    # Найти камень, по которому нажал пользователь
     def gem_at_touch(self, pos):
         for row in range(self.rows):
             for col in range(self.cols):
@@ -565,7 +688,7 @@ class Match3Board(FloatLayout):
                     return gem
         return None
 
-    # Обработать нажатие: выбрать камень для возможного обмена
+    # Обработать начало касания и запомнить выбранный камень
     def on_touch_down(self, touch):
         if self.level_finished:
             return super().on_touch_down(touch)
@@ -581,7 +704,7 @@ class Match3Board(FloatLayout):
 
         return super().on_touch_down(touch)
 
-    # Обработать отпускание: определить направление свайпа и выполнить ход
+    # Обработать окончание касания и определить направление свайпа
     def on_touch_up(self, touch):
         if self.level_finished:
             return super().on_touch_up(touch)
@@ -598,12 +721,16 @@ class Match3Board(FloatLayout):
         self.selected, selected = None, self.selected
         self.touch_start = None
 
-        if abs(dx) < 25 and abs(dy) < 25:
+        threshold = self.swipe_threshold_px()
+        if abs(dx) < threshold and abs(dy) < threshold:
             return True
 
-        drow, dcol = (0, 1) if abs(dx) > abs(dy) and dx > 0 else \
-                     (0, -1) if abs(dx) > abs(dy) else \
-                     (-1, 0) if dy > 0 else (1, 0)
+        drow, dcol = (
+            (0, 1) if abs(dx) > abs(dy) and dx > 0 else
+            (0, -1) if abs(dx) > abs(dy) else
+            (-1, 0) if dy > 0 else
+            (1, 0)
+        )
 
         r1, c1 = selected.row, selected.col
         r2, c2 = r1 + drow, c1 + dcol
@@ -653,11 +780,11 @@ class Match3Board(FloatLayout):
 
         return groups
 
-    # Вернуть множество всех координат клеток, входящих в совпадения
+    # Вернуть множество клеток, входящих в совпадения
     def find_matches(self):
         return {cell for group in self.find_match_groups() for cell in group}
 
-    # Начислить очки за группы совпадений с небольшой задержкой
+    # Начислить очки за найденные группы совпадений
     def add_score_for_groups(self, groups):
         gained = sum(len(group) - 2 for group in groups)
         old_score = self.score
@@ -673,7 +800,7 @@ class Match3Board(FloatLayout):
 
         Clock.schedule_once(apply_score, 0.5)
 
-    # Показать временную надпись «+N» рядом со счётчиком очков
+    # Показать временную надпись с прибавкой очков рядом со счётчиком
     def show_score_gain(self, gained):
         self.score_label.texture_update()
 
@@ -683,13 +810,11 @@ class Match3Board(FloatLayout):
             font_size=self.score_label.font_size,
             color=(1, 1, 1, 1),
             size_hint=(None, None),
-            size=(80, self.score_label.height),
+            size=(max(70, self.safe_width() * 0.1), self.score_label.height),
             halign="left",
             valign="middle",
         )
         gain_label.text_size = gain_label.size
-
-        text_width = self.score_label.texture_size[0]
         gain_label.pos = (self.score_label.right - 2, self.score_label.y)
 
         self.add_widget(gain_label)
@@ -702,7 +827,7 @@ class Match3Board(FloatLayout):
 
     # ---------- Animation ----------
 
-    # Анимировать перемещение пары камней и вызвать callback после завершения обеих анимаций
+    # Анимировать перемещение двух камней и вызвать callback после завершения
     def animate_pair(self, gem1, pos1, gem2, pos2, duration, callback):
         done = {"count": 0}
 
@@ -718,7 +843,7 @@ class Match3Board(FloatLayout):
         anim1.start(gem1)
         anim2.start(gem2)
 
-    # Обменять два камня местами и решить, оставить ход или откатить его назад
+    # Выполнить обмен двух камней и проверить, образовалось ли совпадение
     def swap_gems(self, gem1, gem2):
         self.animating = True
 
@@ -741,7 +866,7 @@ class Match3Board(FloatLayout):
             0.18, after_swap
         )
 
-    # Откатить обмен камней, если после хода не появилось совпадений
+    # Откатить обмен назад, если он не привёл к совпадению
     def swap_back(self, gem1, gem2, old_r1, old_c1, old_r2, old_c2):
         self.grid[old_r2][old_c2], self.grid[old_r1][old_c1] = self.grid[old_r1][old_c1], self.grid[old_r2][old_c2]
         gem1.row, gem1.col = old_r1, old_c1
@@ -772,7 +897,7 @@ class Match3Board(FloatLayout):
 
         Clock.schedule_once(self.collapse_columns, 0.05)
 
-    # Сдвинуть камни вниз в каждом столбце и дозаполнить пустые клетки новыми камнями
+    # Сдвинуть камни вниз и добавить новые камни в пустые клетки
     def collapse_columns(self, *_):
         self.animating = True
         animations_left = {"count": 0}
@@ -799,6 +924,7 @@ class Match3Board(FloatLayout):
                 gem.row, gem.col = target_row, col
                 self.grid[target_row][col] = gem
                 target_pos = self.grid_to_pos(target_row, col)
+                gem.size = (self.gem_size_px(), self.gem_size_px())
 
                 if old_row != target_row:
                     animations_left["count"] += 1
@@ -834,12 +960,35 @@ class Match3Board(FloatLayout):
             Clock.schedule_once(self.resolve_matches, 0.05)
 
 
-# Главный класс Kivy-приложения
 class Match3App(App):
-    # Создать и вернуть корневой виджет приложения — игровое поле
     def build(self):
-        return Match3Board()
+        self.board = Match3Board()
+        Clock.schedule_once(self.init_ads, 1.5)
+        return self.board
 
+    def init_ads(self, *_):
+        try:
+            Logger.info("ADS: init_ads started")
+            self.ads = KivMob(TestIds.APP)
+
+            self.ads.new_banner(TestIds.BANNER, top_pos=False)
+            Logger.info("ADS: banner created")
+
+            self.ads.request_banner()
+            Logger.info("ADS: banner requested")
+
+            Clock.schedule_once(self.show_banner, 1.0)
+
+        except Exception as e:
+            Logger.exception(f"ADS: init failed: {e}")
+
+    def show_banner(self, *_):
+        try:
+            if hasattr(self, "ads"):
+                self.ads.show_banner()
+                Logger.info("ADS: banner shown")
+        except Exception as e:
+            Logger.exception(f"ADS: show failed: {e}")
 
 # Точка входа: запуск игры
 Match3App().run()
