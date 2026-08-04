@@ -1,13 +1,10 @@
-from kivmob import KivMob, TestIds
-from kivy.logger import Logger
-
 import sqlite3
 from copy import deepcopy
 from datetime import datetime
 from random import choice
 
-from kivy.animation import Animation
 from kivy.app import App
+from kivy.animation import Animation
 from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.graphics import Color, Ellipse, Line, RoundedRectangle
@@ -18,8 +15,95 @@ from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
+from kivy.utils import platform
+
+if platform == "android":
+    from jnius import autoclass, PythonJavaClass, java_method
 
 Window.clearcolor = (0.10, 0.08, 0.16, 1)
+
+
+class YandexBannerAds:
+    def __init__(self, ad_unit_id="demo-banner-yandex"):
+        self.ad_unit_id = ad_unit_id
+        self.banner_view = None
+        self.banner_container = None
+
+    def show_banner(self):
+        if platform != "android":
+            return
+
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+        LinearLayout = autoclass("android.widget.LinearLayout")
+        Gravity = autoclass("android.view.Gravity")
+        FrameLayoutParams = autoclass("android.widget.FrameLayout$LayoutParams")
+        ViewGroupLayoutParams = autoclass("android.view.ViewGroup$LayoutParams")
+
+        MobileAds = autoclass("com.yandex.mobile.ads.common.MobileAds")
+        BannerAdView = autoclass("com.yandex.mobile.ads.banner.BannerAdView")
+        BannerAdSize = autoclass("com.yandex.mobile.ads.banner.BannerAdSize")
+        AdRequest = autoclass("com.yandex.mobile.ads.common.AdRequest")
+
+        activity = PythonActivity.mActivity
+
+        class AdsRunnable(PythonJavaClass):
+            __javainterfaces__ = ["java/lang/Runnable"]
+            __javacontext__ = "app"
+
+            @java_method("()V")
+            def run(self):
+                outer = self.outer
+                try:
+                    MobileAds.initialize(activity, None)
+
+                    display_metrics = activity.getResources().getDisplayMetrics()
+                    density = display_metrics.density
+                    width_pixels = display_metrics.widthPixels
+                    width_dp = int(width_pixels / density)
+
+                    outer.banner_container = LinearLayout(activity)
+                    outer.banner_container.setOrientation(LinearLayout.VERTICAL)
+                    outer.banner_container.setGravity(Gravity.CENTER_HORIZONTAL)
+
+                    container_params = FrameLayoutParams(
+                        ViewGroupLayoutParams.MATCH_PARENT,
+                        ViewGroupLayoutParams.WRAP_CONTENT
+                    )
+                    container_params.gravity = Gravity.BOTTOM
+
+                    outer.banner_view = BannerAdView(activity)
+                    outer.banner_view.setAdUnitId(outer.ad_unit_id)
+                    outer.banner_view.setAdSize(BannerAdSize.stickySize(activity, width_dp))
+
+                    banner_params = LinearLayout.LayoutParams(
+                        ViewGroupLayoutParams.MATCH_PARENT,
+                        ViewGroupLayoutParams.WRAP_CONTENT
+                    )
+                    outer.banner_view.setLayoutParams(banner_params)
+
+                    outer.banner_container.addView(outer.banner_view)
+                    activity.addContentView(outer.banner_container, container_params)
+
+                    ad_request = AdRequest.Builder().build()
+                    outer.banner_view.loadAd(ad_request)
+                except Exception as e:
+                    print("Yandex banner error:", e)
+
+        runnable = AdsRunnable()
+        runnable.outer = self
+        activity.runOnUiThread(runnable)
+
+    def destroy_banner(self):
+        if platform != "android":
+            return
+
+        try:
+            if self.banner_view is not None:
+                self.banner_view.destroy()
+                self.banner_view = None
+        except Exception as e:
+            print("Yandex banner destroy error:", e)
+
 
 # Класс для работы с базой данных результатов игры
 class ResultsRepository:
@@ -962,33 +1046,17 @@ class Match3Board(FloatLayout):
 
 class Match3App(App):
     def build(self):
-        self.board = Match3Board()
-        Clock.schedule_once(self.init_ads, 1.5)
-        return self.board
+        root = Match3Board()
+        Clock.schedule_once(self.init_ads, 1)
+        return root
 
     def init_ads(self, *_):
-        try:
-            Logger.info("ADS: init_ads started")
-            self.ads = KivMob(TestIds.APP)
+        self.ads = YandexBannerAds("demo-banner-yandex")
+        self.ads.show_banner()
 
-            self.ads.new_banner(TestIds.BANNER, top_pos=False)
-            Logger.info("ADS: banner created")
-
-            self.ads.request_banner()
-            Logger.info("ADS: banner requested")
-
-            Clock.schedule_once(self.show_banner, 1.0)
-
-        except Exception as e:
-            Logger.exception(f"ADS: init failed: {e}")
-
-    def show_banner(self, *_):
-        try:
-            if hasattr(self, "ads"):
-                self.ads.show_banner()
-                Logger.info("ADS: banner shown")
-        except Exception as e:
-            Logger.exception(f"ADS: show failed: {e}")
+    def on_stop(self):
+        if hasattr(self, "ads") and self.ads:
+            self.ads.destroy_banner()
 
 # Точка входа: запуск игры
 Match3App().run()
