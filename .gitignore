@@ -3,3 +3,4 @@
 .venv
 bin
 match3_results.db
+Dockerfile
