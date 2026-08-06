@@ -15,8 +15,8 @@
               "type": "markdown",
               "state": {
                 "file": "Элементали.md",
-                "mode": "source",
-                "source": false
+                "mode": "preview",
+                "source": true
               },
               "icon": "lucide-file",
               "title": "Элементали"
@@ -33,10 +33,14 @@
             "id": "a17967dfb8e078de",
             "type": "leaf",
             "state": {
-              "type": "graph",
-              "state": {},
-              "icon": "lucide-git-fork",
-              "title": "Graph view"
+              "type": "markdown",
+              "state": {
+                "file": "Абилки.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "Абилки"
             }
           }
         ]
@@ -216,16 +220,16 @@
       "obsidian-git:Open Git source control": false
     }
   },
-  "active": "a17967dfb8e078de",
+  "active": "36ae10f25de47eb0",
   "lastOpenFiles": [
+    "Абилки.md",
+    "Элементали.md",
     "Механизм жизней.md",
     "Правила подсчета очков за уровень.md",
     "Начальная конфигурация уровня.md",
     "Старт уровня.md",
     "Уровень.md",
-    "Абилки.md",
     "Апдейты.md",
-    "Элементали.md",
     "Хранение данных.md",
     "Политика накопления стартовых бонусов.md",
     "Остальное.md",
