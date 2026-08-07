@@ -4,11 +4,11 @@
     "type": "split",
     "children": [
       {
-        "id": "e97f050179aeb038",
+        "id": "7fcb184a0d3dde2c",
         "type": "tabs",
         "children": [
           {
-            "id": "0bbe75f868b2e5bb",
+            "id": "1757582f2b4ceadd",
             "type": "leaf",
             "state": {
               "type": "graph",
@@ -194,7 +194,7 @@
       "obsidian-git:Open Git source control": false
     }
   },
-  "active": "0bbe75f868b2e5bb",
+  "active": "1757582f2b4ceadd",
   "lastOpenFiles": [
     "Уровень/Объекты на уровне/Элементали.md",
     "Игра в целом.md",

@@ -15,13 +15,6 @@
       }
     },
     {
-      "query": "path:\"Уровень/Объекты на уровне\"  ",
-      "color": {
-        "a": 1,
-        "rgb": 14701138
-      }
-    },
-    {
       "query": "path:Остальное  ",
       "color": {
         "a": 1,
@@ -54,5 +47,5 @@
   "linkStrength": 0.488,
   "linkDistance": 116,
   "scale": 0.9999999999999983,
-  "close": true
+  "close": false
 }
