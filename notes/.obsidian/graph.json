@@ -8,30 +8,51 @@
   "collapse-color-groups": false,
   "colorGroups": [
     {
-      "query": "tag:уровень",
+      "query": "path:Уровень  ",
       "color": {
         "a": 1,
         "rgb": 14701138
       }
     },
     {
-      "query": "",
+      "query": "path:\"Уровень/Объекты на уровне\"  ",
       "color": {
         "a": 1,
-        "rgb": 14725458
+        "rgb": 14701138
+      }
+    },
+    {
+      "query": "path:Остальное  ",
+      "color": {
+        "a": 1,
+        "rgb": 11657298
+      }
+    },
+    {
+      "query": "path:\"Вне уровня\"  ",
+      "color": {
+        "a": 1,
+        "rgb": 5431378
+      }
+    },
+    {
+      "query": "path:\"Техническая основа\"  ",
+      "color": {
+        "a": 1,
+        "rgb": 5431473
       }
     }
   ],
-  "collapse-display": true,
+  "collapse-display": false,
   "showArrow": true,
-  "textFadeMultiplier": 0,
-  "nodeSizeMultiplier": 1,
-  "lineSizeMultiplier": 1,
-  "collapse-forces": true,
-  "centerStrength": 0.512975609756098,
+  "textFadeMultiplier": -0.9,
+  "nodeSizeMultiplier": 0.777873170731707,
+  "lineSizeMultiplier": 1.32858536585366,
+  "collapse-forces": false,
+  "centerStrength": 0.531707317073171,
   "repelStrength": 10.205081114172,
   "linkStrength": 0.488,
-  "linkDistance": 85,
+  "linkDistance": 116,
   "scale": 0.9999999999999983,
   "close": true
 }
