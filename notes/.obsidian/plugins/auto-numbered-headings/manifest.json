@@ -1,0 +1,11 @@
+{
+	"id": "auto-numbered-headings",
+	"name": "Auto Numbered Headings",
+	"version": "2.2.0",
+	"minAppVersion": "0.15.0",
+	"description": "Automatically numbers headings in your Markdown notes.",
+	"author": "yu-zou",
+	"authorUrl": "https://github.com/yu-zou",
+
+	"isDesktopOnly": false
+}
