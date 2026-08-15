@@ -1,5 +1,5 @@
 {
-  "collapse-filter": true,
+  "collapse-filter": false,
   "search": "",
   "showTags": false,
   "showAttachments": false,
@@ -8,35 +8,28 @@
   "collapse-color-groups": false,
   "colorGroups": [
     {
-      "query": "path:Уровень  ",
+      "query": "file: ЭКРАН",
       "color": {
         "a": 1,
-        "rgb": 14701138
+        "rgb": 1008619
       }
     },
     {
-      "query": "path:Остальное  ",
+      "query": "path:\"ПАПКА - Игра в целом/ПАПКА - Геймплей\"  ",
+      "color": {
+        "a": 1,
+        "rgb": 14725458
+      }
+    },
+    {
+      "query": "path:\"ПАПКА - Игра в целом/ПАПКА - Техническая основа\"  ",
       "color": {
         "a": 1,
         "rgb": 11657298
       }
-    },
-    {
-      "query": "path:\"Вне уровня\"  ",
-      "color": {
-        "a": 1,
-        "rgb": 5431378
-      }
-    },
-    {
-      "query": "path:\"Техническая основа\"  ",
-      "color": {
-        "a": 1,
-        "rgb": 5431473
-      }
     }
   ],
-  "collapse-display": false,
+  "collapse-display": true,
   "showArrow": true,
   "textFadeMultiplier": -0.9,
   "nodeSizeMultiplier": 0.777873170731707,
@@ -46,6 +39,6 @@
   "repelStrength": 10.205081114172,
   "linkStrength": 0.488,
   "linkDistance": 116,
-  "scale": 0.7132754626224406,
-  "close": true
+  "scale": 0.7132754626224401,
+  "close": false
 }
