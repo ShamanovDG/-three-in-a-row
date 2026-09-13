@@ -1,6 +1,3 @@
-from kivmob import KivMob, TestIds
-from kivy.logger import Logger
-
 import sqlite3
 from copy import deepcopy
 from datetime import datetime
@@ -19,15 +16,229 @@ from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
 
+from kivy.utils import platform
+
+if platform == "android":
+    from jnius import autoclass, cast, PythonJavaClass, java_method
+    from android.runnable import run_on_ui_thread
+
 Window.clearcolor = (0.10, 0.08, 0.16, 1)
 
-# Класс для работы с базой данных результатов игры
+
+if platform == "android":
+    # Слушатель инициализации Yandex Ads SDK.
+    class YandexInitializationListener(PythonJavaClass):
+        __javainterfaces__ = ["com/yandex/mobile/ads/common/InitializationListener"]
+        __javacontext__ = "app"
+
+        # ВАЖНО: __cinit__ у PythonJavaClass не принимает произвольные
+        # kwargs — Cython передаёт ему те же аргументы, что были указаны
+        # при создании объекта, даже если наш __init__ их не принимает.
+        # Поэтому конструктор не принимает параметров: колбэк присваивается
+        # отдельным атрибутом ПОСЛЕ создания объекта.
+        on_complete = None
+
+        @java_method("()V")
+        def onInitializationCompleted(self):
+            print("[YandexAds] SDK initialization completed")
+            if self.on_complete:
+                self.on_complete()
+
+    # Слушатель событий жизненного цикла баннера.
+class BannerAdEventListenerImpl(PythonJavaClass):
+    __javainterfaces__ = [
+        "com/yandex/mobile/ads/banner/BannerAdEventListener"
+    ]
+    __javacontext__ = "app"
+
+    on_loaded = None
+    on_failed = None
+
+    @java_method("()V")
+    def onAdLoaded(self):
+        print("[YandexAds] Banner loaded successfully")
+        if self.on_loaded:
+            self.on_loaded()
+
+    @java_method(
+        "(Lcom/yandex/mobile/ads/common/AdRequestError;)V"
+    )
+    def onAdFailedToLoad(self, error):
+        try:
+            message = error.toString()
+        except Exception:
+            message = "<no error details>"
+
+        print(f"[YandexAds] Banner failed to load: {message}")
+
+        if self.on_failed:
+            self.on_failed(message)
+
+    @java_method("()V")
+    def onAdClicked(self):
+        print("[YandexAds] Banner clicked")
+
+    @java_method(
+        "(Lcom/yandex/mobile/ads/impressiondata/ImpressionData;)V"
+    )
+    def onImpression(self, impression_data):
+        print("[YandexAds] Banner impression")
+
+
+class YandexBannerAds:
+
+    def destroy_banner(self):
+        if platform != "android":
+            return
+
+        self._destroy_banner_on_ui_thread()
+
+
+    @run_on_ui_thread
+    def _destroy_banner_on_ui_thread(self):
+        try:
+            if self.banner_view is not None:
+                self.banner_view.destroy()
+                self.banner_view = None
+
+            if self.banner_container is not None:
+                parent = self.banner_container.getParent()
+                if parent is not None:
+                    parent.removeView(self.banner_container)
+                self.banner_container = None
+
+        except Exception as error:
+            print(f"[YandexAds] Failed to destroy banner: {error}")
+
+    def __init__(self, ad_unit_id):
+        self.ad_unit_id = ad_unit_id
+        self.banner_view = None
+        self.banner_container = None
+        self._init_listener = None
+        self._ad_event_listener = None
+
+    def show_banner(self):
+        if platform != "android":
+            return
+        self._show_banner_on_ui_thread()
+
+    @run_on_ui_thread
+    def _show_banner_on_ui_thread(self):
+        try:
+            self._show_banner_impl()
+        except Exception as exc:
+            print(f"[YandexAds] Failed to show banner: {exc}")
+
+    def _show_banner_impl(self):
+        PythonActivity = autoclass(
+            "org.kivy.android.PythonActivity"
+        )
+        FrameLayout = autoclass(
+            "android.widget.FrameLayout"
+        )
+        FrameLayoutParams = autoclass(
+            "android.widget.FrameLayout$LayoutParams"
+        )
+        Gravity = autoclass("android.view.Gravity")
+
+        YandexAds = autoclass(
+            "com.yandex.mobile.ads.common.YandexAds"
+        )
+        BannerAdView = autoclass(
+            "com.yandex.mobile.ads.banner.BannerAdView"
+        )
+        BannerAdSize = autoclass(
+            "com.yandex.mobile.ads.banner.BannerAdSize"
+        )
+        AdRequestBuilder = autoclass(
+            "com.yandex.mobile.ads.common.AdRequest$Builder"
+        )
+
+        # Получаем текущую Android Activity.
+        # Эту строку нельзя переносить ниже: activity используется далее.
+        activity = PythonActivity.mActivity
+
+        # Инициализируем SDK. Listener сохраняем в self, чтобы Python
+        # не удалил Java callback сборщиком мусора до его вызова.
+        self._init_listener = YandexInitializationListener()
+        self._init_listener.on_complete = (
+            lambda: print("[YandexAds] SDK initialization completed")
+        )
+        YandexAds.initialize(activity, self._init_listener)
+
+        # android.R.id.content = 16908290.
+        # Это корневой контейнер настоящего Android-окна.
+        root_view = cast(
+            "android.widget.FrameLayout",
+            activity.findViewById(16908290)
+        )
+
+        # Создаём отдельный контейнер для баннера внизу экрана.
+        self.banner_container = FrameLayout(activity)
+
+        container_params = FrameLayoutParams(
+            FrameLayoutParams.MATCH_PARENT,
+            FrameLayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM
+        )
+        root_view.addView(self.banner_container, container_params)
+
+        # Создаём Android View баннера.
+        self.banner_view = BannerAdView(activity)
+
+        # Вычисляем ширину устройства в dp.
+        # Для BannerAdSize.sticky(...) нужны dp, а не реальные пиксели.
+        display_metrics = activity.getResources().getDisplayMetrics()
+        screen_width_px = display_metrics.widthPixels
+        density = display_metrics.density
+        screen_width_dp = int(screen_width_px / density)
+
+        # Yandex Mobile Ads SDK 8.1.0:
+        # sticky(), а не stickySize() и не getStickySize().
+        self.banner_view.setAdSize(
+            BannerAdSize.sticky(activity, screen_width_dp)
+        )
+
+        # Listener покажет в adb logcat, загрузилась ли реклама.
+        self._ad_event_listener = BannerAdEventListenerImpl()
+
+        self._ad_event_listener.on_loaded = (
+            lambda: print("[YandexAds] Banner loaded successfully")
+        )
+
+        self._ad_event_listener.on_failed = (
+            lambda error: print(
+                f"[YandexAds] Banner failed to load: {error}"
+            )
+        )
+
+        self.banner_view.setBannerAdEventListener(
+            self._ad_event_listener
+        )
+
+        # Размещаем баннер по центру контейнера.
+        banner_params = FrameLayoutParams(
+            FrameLayoutParams.WRAP_CONTENT,
+            FrameLayoutParams.WRAP_CONTENT,
+            Gravity.CENTER_HORIZONTAL
+        )
+        self.banner_container.addView(
+            self.banner_view,
+            banner_params
+        )
+
+        # SDK 8: ID задаётся через AdRequest$Builder.
+        request = AdRequestBuilder(self.ad_unit_id).build()
+
+        # Отправляем запрос рекламы.
+        self.banner_view.loadAd(request)
+
+
 class ResultsRepository:
     def __init__(self, db_path="match3_results.db"):
         self.db_path = db_path
         self.setup()
 
-    # Создать таблицу результатов в базе данных, если она ещё не существует
     def setup(self):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
@@ -41,7 +252,6 @@ class ResultsRepository:
                 )
             """)
 
-    # Сохранить один результат игры в базу данных
     def save_result(self, score, target_score, won, time_left):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
@@ -55,7 +265,6 @@ class ResultsRepository:
                 time_left
             ))
 
-    # Загрузить список всех сохранённых результатов игр
     def load_results(self):
         with sqlite3.connect(self.db_path) as conn:
             return conn.execute("""
@@ -65,7 +274,6 @@ class ResultsRepository:
             """).fetchall()
 
 
-# Класс для подбора новых значений камней при дозаполнении поля
 class RefillPlanner:
     def __init__(self, rows, cols, palette, max_tries=200):
         self.rows = rows
@@ -73,14 +281,12 @@ class RefillPlanner:
         self.values = [value for _, value in palette]
         self.max_tries = max_tries
 
-    # Построить сетку значений (value) из сетки объектов Gem/None
     def extract_values_grid(self, grid):
         return [
             [None if gem is None else gem.value for gem in row]
             for row in grid
         ]
 
-    # Найти все совпадения по 3+ одинаковых значений в сетке
     def find_matches_in_values(self, values_grid):
         matched = set()
 
@@ -112,17 +318,14 @@ class RefillPlanner:
 
         return matched
 
-    # Проверить, есть ли хотя бы одно совпадение в сетке значений
     def has_any_match(self, values_grid):
         return bool(self.find_matches_in_values(values_grid))
 
-    # Вернуть копию сетки значений с обменом двух ячеек
     def swap_in_values(self, values_grid, r1, c1, r2, c2):
         new_grid = deepcopy(values_grid)
         new_grid[r1][c1], new_grid[r2][c2] = new_grid[r2][c2], new_grid[r1][c1]
         return new_grid
 
-    # Проверить, существует ли хотя бы один ход, который даёт совпадение
     def has_possible_move(self, values_grid):
         for row in range(self.rows):
             for col in range(self.cols):
@@ -134,7 +337,6 @@ class RefillPlanner:
                         return True
         return False
 
-    # Сгенерировать случайные значения для новых камней в заданных позициях
     def build_random_refill(self, values_grid, spawn_positions):
         trial = deepcopy(values_grid)
         spawned_values = {}
@@ -144,7 +346,6 @@ class RefillPlanner:
             spawned_values[(row, col)] = value
         return trial, spawned_values
 
-    # Сгенерировать дозаполнение без мгновенных совпадений, но с возможным ходом
     def generate_valid_refill(self, grid, spawn_positions):
         base_values = self.extract_values_grid(grid)
 
@@ -160,7 +361,6 @@ class RefillPlanner:
         return spawned_values
 
 
-# Класс, представляющий один камень на игровом поле
 class Gem(Widget):
     def __init__(self, row, col, color_rgba, value, gem_size=72, **kwargs):
         super().__init__(**kwargs)
@@ -198,7 +398,6 @@ class Gem(Widget):
         self.bind(pos=self._update_graphics, size=self._update_graphics)
         self._update_graphics()
 
-    # Обновить графику камня (круг, тень, обводка и текст) при изменении размера/позиции
     def _update_graphics(self, *_):
         self.circle.pos = self.pos
         self.circle.size = self.size
@@ -218,7 +417,6 @@ class Gem(Widget):
         self.label.font_size = max(14, self.width * 0.33)
 
 
-# Класс, представляющий игровое поле для игры «Match-3»
 class Match3Board(FloatLayout):
     rows = 6
     cols = 6
@@ -236,7 +434,6 @@ class Match3Board(FloatLayout):
 
         self.target_score = 30
         self.initial_time = 60
-
 
         self.repo = ResultsRepository()
         self.refill_planner = RefillPlanner(self.rows, self.cols, self.palette)
@@ -259,59 +456,45 @@ class Match3Board(FloatLayout):
         self.bind(size=self.reposition_board, pos=self.reposition_board)
 
         Clock.schedule_once(self.build_board, 0)
-        
 
-    # ---------- Адаптивная геометрия ----------
-
-    # Вернуть безопасную ширину виджета, чтобы избежать нуля при первом рендере
     def safe_width(self):
         return max(self.width, 1)
 
-    # Вернуть безопасную высоту виджета, чтобы избежать нуля при первом рендере
     def safe_height(self):
         return max(self.height, 1)
 
-    # Вычислить размер стороны игрового поля относительно текущего окна
     def board_side(self):
         return min(self.safe_width() * 0.95, self.safe_height() * 0.68)
 
-    # Вычислить расстояние между клетками относительно размера поля
     def gap_px(self):
         return max(4, self.board_side() * 0.018)
 
-    # Вычислить размер одной клетки поля
     def cell_size_px(self):
         gap = self.gap_px()
         return (self.board_side() - gap * (self.cols - 1)) / self.cols
 
-    # Вычислить размер самого камня внутри клетки
     def gem_size_px(self):
         return self.cell_size_px() * 0.95
 
-    # Вычислить полную ширину игрового поля в пикселях
     def board_pixel_width(self):
         cell = self.cell_size_px()
         gap = self.gap_px()
         return self.cols * cell + (self.cols - 1) * gap
 
-    # Вычислить полную высоту игрового поля в пикселях
     def board_pixel_height(self):
         cell = self.cell_size_px()
         gap = self.gap_px()
         return self.rows * cell + (self.rows - 1) * gap
 
-    # Вычислить левую границу игрового поля
     def board_left(self):
         return (self.safe_width() - self.board_pixel_width()) / 2
 
-    # Вычислить нижнюю границу игрового поля с учётом места под UI
     def board_bottom(self):
         lower_reserved = self.safe_height() * 0.08
         top_reserved = self.safe_height() * 0.16
         free_y = self.safe_height() - top_reserved - lower_reserved - self.board_pixel_height()
         return lower_reserved + max(0, free_y / 2)
 
-    # Вернуть прямоугольник фона под игровое поле
     def board_rect(self):
         padding = self.cell_size_px() * 0.18
         return (
@@ -321,7 +504,6 @@ class Match3Board(FloatLayout):
             self.board_pixel_height() + padding * 2,
         )
 
-    # Преобразовать координаты сетки (row, col) в экранную позицию камня
     def grid_to_pos(self, row, col):
         cell = self.cell_size_px()
         gap = self.gap_px()
@@ -331,7 +513,6 @@ class Match3Board(FloatLayout):
         y = self.board_bottom() + (self.rows - 1 - row) * (cell + gap) + (cell - gem) / 2
         return x, y
 
-    # Вычислить позицию появления нового камня выше поля
     def spawn_pos_above(self, row, col, extra_rows=1):
         cell = self.cell_size_px()
         gap = self.gap_px()
@@ -341,13 +522,9 @@ class Match3Board(FloatLayout):
         y = self.board_bottom() + (self.rows - 1 - row + extra_rows) * (cell + gap) + (cell - gem) / 2
         return x, y
 
-    # Вычислить минимальный порог свайпа в зависимости от размера окна
     def swipe_threshold_px(self):
         return max(18, min(self.safe_width(), self.safe_height()) * 0.025)
 
-    # ---------- UI ----------
-
-    # Создать элементы интерфейса и добавить их на экран
     def build_ui(self):
         self.timer_label = self.make_label(self.timer_text(), "left")
         self.score_label = self.make_label(self.score_text(), "right")
@@ -369,7 +546,6 @@ class Match3Board(FloatLayout):
         self.bind(size=self.update_ui_positions, pos=self.update_ui_positions)
         Clock.schedule_once(self.update_ui_positions, 0)
 
-    # Создать метку интерфейса с заданным текстом и выравниванием
     def make_label(self, text, halign):
         label = Label(
             text=text,
@@ -382,7 +558,6 @@ class Match3Board(FloatLayout):
         label.text_size = label.size
         return label
 
-    # Создать кнопку с привязанным обработчиком нажатия
     def make_button(self, text, callback):
         btn = Button(
             text=text,
@@ -398,7 +573,6 @@ class Match3Board(FloatLayout):
         btn.bind(on_release=lambda *_: callback())
         return btn
 
-    # Пересчитать размеры и позиции элементов интерфейса при изменении окна
     def update_ui_positions(self, *_):
         w = self.safe_width()
         h = self.safe_height()
@@ -458,7 +632,6 @@ class Match3Board(FloatLayout):
             h * 0.27,
         )
 
-    # Переместить UI-элементы на передний план поверх камней
     def bring_ui_to_front(self):
         for widget in [
             self.score_label,
@@ -471,19 +644,16 @@ class Match3Board(FloatLayout):
                 self.remove_widget(widget)
             self.add_widget(widget)
 
-    # Показать кнопки после завершения уровня
     def show_end_buttons(self):
         for btn in (self.restart_button, self.results_button):
             btn.opacity = 1
             btn.disabled = False
 
-    # Скрыть кнопки завершения уровня
     def hide_end_buttons(self):
         for btn in (self.restart_button, self.results_button):
             btn.opacity = 0
             btn.disabled = True
 
-    # Показать всплывающее окно с историей сохранённых результатов
     def show_results_popup(self):
         rows = self.repo.load_results()
 
@@ -529,25 +699,18 @@ class Match3Board(FloatLayout):
         close_btn.bind(on_release=popup.dismiss)
         popup.open()
 
-    # ---------- Методы управления состоянием игры ----------
-
-    # Вернуть строку с текущим количеством очков
     def score_text(self):
         return f"Очки: {self.score}"
 
-    # Вернуть строку с оставшимся временем
     def timer_text(self):
         return f"Время: {self.time_left}"
 
-    # Обновить текст метки счёта
     def update_score(self):
         self.score_label.text = self.score_text()
 
-    # Обновить текст метки таймера
     def update_timer(self):
         self.timer_label.text = self.timer_text()
 
-    # Сбросить игровое состояние перед новым запуском уровня
     def reset_state(self):
         self.grid = [[None for _ in range(self.cols)] for _ in range(self.rows)]
         self.selected = None
@@ -562,9 +725,6 @@ class Match3Board(FloatLayout):
         self.update_timer()
         self.hide_end_buttons()
 
-    # ---------- Board redraw ----------
-
-    # Пересчитать размер и положение поля и всех камней при изменении окна
     def reposition_board(self, *_):
         bx, by, bw, bh = self.board_rect()
         radius = max(10, self.cell_size_px() * 0.2)
@@ -582,21 +742,16 @@ class Match3Board(FloatLayout):
 
         self.update_ui_positions()
 
-    # ---------- Board building ----------
-
-    # Создать случайный камень для указанной клетки
     def create_random_gem(self, row, col):
         color_rgba, value = choice(self.palette)
         return Gem(row, col, color_rgba, value, gem_size=self.gem_size_px())
 
-    # Создать камень по указанному значению
     def create_gem_by_value(self, row, col, value):
         for color_rgba, v in self.palette:
             if v == value:
                 return Gem(row, col, color_rgba, value, gem_size=self.gem_size_px())
         raise ValueError(f"Unknown gem value: {value}")
 
-    # Удалить все текущие камни из иерархии виджетов
     def clear_board_widgets(self):
         for row in range(self.rows):
             for col in range(self.cols):
@@ -604,7 +759,6 @@ class Match3Board(FloatLayout):
                 if gem and gem.parent:
                     self.remove_widget(gem)
 
-    # Построить стартовое игровое поле и запустить таймер
     def build_board(self, *_):
         self.clear_board_widgets()
 
@@ -620,7 +774,6 @@ class Match3Board(FloatLayout):
         self.start_level_timer()
         Clock.schedule_once(self.resolve_matches, 0.1)
 
-    # Полностью перезапустить уровень
     def restart_level(self):
         if self.timer_event:
             self.timer_event.cancel()
@@ -631,15 +784,11 @@ class Match3Board(FloatLayout):
         self.bring_ui_to_front()
         self.build_board()
 
-    # ---------- Timer ----------
-
-    # Запустить таймер уровня с обновлением раз в секунду
     def start_level_timer(self):
         if self.timer_event:
             self.timer_event.cancel()
         self.timer_event = Clock.schedule_interval(self.tick, 1)
 
-    # Обработать один тик таймера и завершить игру при истечении времени
     def tick(self, _dt):
         if self.level_finished:
             return False
@@ -653,7 +802,6 @@ class Match3Board(FloatLayout):
 
         self.update_timer()
 
-    # Завершить уровень, сохранить результат и показать статус
     def finish_level(self, won):
         if self.level_finished:
             return
@@ -677,9 +825,6 @@ class Match3Board(FloatLayout):
         self.show_end_buttons()
         self.bring_ui_to_front()
 
-    # ---------- Input ----------
-
-    # Найти камень, по которому нажал пользователь
     def gem_at_touch(self, pos):
         for row in range(self.rows):
             for col in range(self.cols):
@@ -688,7 +833,6 @@ class Match3Board(FloatLayout):
                     return gem
         return None
 
-    # Обработать начало касания и запомнить выбранный камень
     def on_touch_down(self, touch):
         if self.level_finished:
             return super().on_touch_down(touch)
@@ -704,7 +848,6 @@ class Match3Board(FloatLayout):
 
         return super().on_touch_down(touch)
 
-    # Обработать окончание касания и определить направление свайпа
     def on_touch_up(self, touch):
         if self.level_finished:
             return super().on_touch_up(touch)
@@ -740,9 +883,6 @@ class Match3Board(FloatLayout):
 
         return True
 
-    # ---------- Match logic ----------
-
-    # Найти все группы совпадающих камней по 3+ в строках и столбцах
     def find_match_groups(self):
         groups = []
 
@@ -780,11 +920,9 @@ class Match3Board(FloatLayout):
 
         return groups
 
-    # Вернуть множество клеток, входящих в совпадения
     def find_matches(self):
         return {cell for group in self.find_match_groups() for cell in group}
 
-    # Начислить очки за найденные группы совпадений
     def add_score_for_groups(self, groups):
         gained = sum(len(group) - 2 for group in groups)
         old_score = self.score
@@ -800,7 +938,6 @@ class Match3Board(FloatLayout):
 
         Clock.schedule_once(apply_score, 0.5)
 
-    # Показать временную надпись с прибавкой очков рядом со счётчиком
     def show_score_gain(self, gained):
         self.score_label.texture_update()
 
@@ -825,9 +962,6 @@ class Match3Board(FloatLayout):
 
         Clock.schedule_once(remove_gain, 0.5)
 
-    # ---------- Animation ----------
-
-    # Анимировать перемещение двух камней и вызвать callback после завершения
     def animate_pair(self, gem1, pos1, gem2, pos2, duration, callback):
         done = {"count": 0}
 
@@ -843,7 +977,6 @@ class Match3Board(FloatLayout):
         anim1.start(gem1)
         anim2.start(gem2)
 
-    # Выполнить обмен двух камней и проверить, образовалось ли совпадение
     def swap_gems(self, gem1, gem2):
         self.animating = True
 
@@ -866,7 +999,6 @@ class Match3Board(FloatLayout):
             0.18, after_swap
         )
 
-    # Откатить обмен назад, если он не привёл к совпадению
     def swap_back(self, gem1, gem2, old_r1, old_c1, old_r2, old_c2):
         self.grid[old_r2][old_c2], self.grid[old_r1][old_c1] = self.grid[old_r1][old_c1], self.grid[old_r2][old_c2]
         gem1.row, gem1.col = old_r1, old_c1
@@ -878,7 +1010,6 @@ class Match3Board(FloatLayout):
             0.18, lambda: setattr(self, "animating", False)
         )
 
-    # Удалить совпавшие камни и запустить перестройку столбцов
     def resolve_matches(self, *_):
         groups = self.find_match_groups()
         matches = {cell for group in groups for cell in group}
@@ -897,7 +1028,6 @@ class Match3Board(FloatLayout):
 
         Clock.schedule_once(self.collapse_columns, 0.05)
 
-    # Сдвинуть камни вниз и добавить новые камни в пустые клетки
     def collapse_columns(self, *_):
         self.animating = True
         animations_left = {"count": 0}
@@ -963,32 +1093,18 @@ class Match3Board(FloatLayout):
 class Match3App(App):
     def build(self):
         self.board = Match3Board()
-        Clock.schedule_once(self.init_ads, 1.5)
+        Clock.schedule_once(self.init_ads, 1)
         return self.board
 
     def init_ads(self, *_):
-        try:
-            Logger.info("ADS: init_ads started")
-            self.ads = KivMob(TestIds.APP)
+        # Только для тестов.
+        # Перед публикацией обязательно замените на настоящий ID R-M-...
+        self.ads = YandexBannerAds("demo-banner-yandex")
+        self.ads.show_banner()
 
-            self.ads.new_banner(TestIds.BANNER, top_pos=False)
-            Logger.info("ADS: banner created")
+    def on_stop(self):
+        if hasattr(self, "ads") and self.ads:
+            self.ads.destroy_banner()
 
-            self.ads.request_banner()
-            Logger.info("ADS: banner requested")
 
-            Clock.schedule_once(self.show_banner, 1.0)
-
-        except Exception as e:
-            Logger.exception(f"ADS: init failed: {e}")
-
-    def show_banner(self, *_):
-        try:
-            if hasattr(self, "ads"):
-                self.ads.show_banner()
-                Logger.info("ADS: banner shown")
-        except Exception as e:
-            Logger.exception(f"ADS: show failed: {e}")
-
-# Точка входа: запуск игры
 Match3App().run()
